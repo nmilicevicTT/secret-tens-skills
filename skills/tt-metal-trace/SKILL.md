@@ -1,6 +1,6 @@
 ---
 name: tt-metal-trace
-description: Make a tt-metal model, or part of one, run under Metal trace capture/replay (ttnn.begin_trace_capture / execute_trace). Use when adding trace to a model, converting an op to take per-call values from device tensors, debugging a trace that replays wrong/hangs/corrupts, or mixing traced and untraced code. Follows the method Pavle Popovic used for deepseek_v3_d_p traced prefill.
+description: Make a tt-metal model, or part of one, run under Metal trace capture/replay (ttnn.begin_trace_capture / execute_trace). Use when adding trace to a model, converting an op to take per-call values from device tensors, debugging a trace that replays wrong/hangs/corrupts, or mixing traced and untraced code. Based on the deepseek_v3_d_p traced prefill.
 ---
 
 # tt-metal-trace
@@ -17,7 +17,8 @@ runs, no allocator runs, nothing is checked. Every rule below follows from that 
 |---|---|
 | How capture/replay, the caches and sub-device managers work internally | `internals.md` |
 | Recipe for converting a per-call scalar into a device metadata tensor (op + kernel side) | `metadata-pattern.md` |
-| Symptom → cause catalogue from past bugs | `bugs.md` |
+| Branch-free traced path with device masks / one-hot selection | `fixed-path.md` |
+| Symptom → cause catalogue from past bugs, grouped by scenario | `bugs.md` |
 | In-flight task state (local only, gitignored; may be absent) | `worklog.md` |
 
 ## Hard rules
@@ -58,10 +59,8 @@ runs, no allocator runs, nothing is checked. Every rule below follows from that 
    - varies per call and an op consumes it → metadata tensor (`metadata-pattern.md`);
    - host-computed from data → move to a device op (e.g. `moe_padding_config`) or memoize before capture;
    - lazy allocation / per-call free → persistent buffer allocated during warmup, written in place;
-   - branch → decide at build time (constant per rank/config), separate traces, or a **fixed path**: run
-     every branch each call and select with persistent device masks (`x*keep`, `+ select@patch`, one-hot
-     row-select matmul with HiFi4 + fp32 dest). `x*1`, `x+0` and one-hot HiFi4 matmuls are exact, so it
-     stays bit-exact vs eager. Cost: every branch runs every call (see Perf);
+   - branch → decide at build time (constant per rank/config), separate traces, or a **fixed path**
+     (every branch runs, device masks select; stays bit-exact): `fixed-path.md`;
    - host-side value asserts (tile-align, range) cannot run on the metadata path; move them to the code
      that packs the metadata.
 3. **Decide the traced boundary.** Mixing is legal (see below). Start with the smallest region that
@@ -78,6 +77,17 @@ runs, no allocator runs, nothing is checked. Every rule below follows from that 
    - warm-ack count = every layer that acks (including extra layers beyond the main stack), and
      a D2H ack FIFO large enough to hold all warm acks (`bugs.md`).
 5. **Validate** (below). Only then measure perf.
+
+## Scenarios that need extra care
+
+Spot these early; each has a group in `bugs.md`.
+- **Extra stage beside the main stack** (draft model, prediction heads, post-processing): register it
+  with the trace controller, count its acks, extend the inter-rank metadata, warm its programs.
+- **Traced and untraced parts in one call**: handoff ownership (borrow, never free; no free on send).
+- **Pipeline-parallel ranks**: capture order, warm-up send, ack FIFO size, first-request TTFT.
+- **Eager code between capture and replay** (reference runs in tests, eager fallbacks): module-level
+  keepalives and first-time compiles survive into the replay.
+- **Data-dependent kernel choice** (token-count thresholds): eager differs too; not trace.
 
 ## Mixing traced and untraced code
 
