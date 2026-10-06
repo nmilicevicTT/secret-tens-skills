@@ -1,0 +1,7 @@
+{
+  "name": "sts",
+  "description": "Tenstorrent skills (tt-metal trace, ...) plus an always-on skill-evolution rule",
+  "version": "0.1.0",
+  "author": { "name": "Nikola Milicevic" },
+  "repository": "https://github.com/nmilicevicTT/secret-tens-skills"
+}

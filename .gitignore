@@ -1,0 +1,3 @@
+# In-flight task state: host names, run IDs, personal paths. Local only.
+skills/*/worklog.md
+__pycache__/
