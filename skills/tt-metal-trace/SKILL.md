@@ -41,7 +41,8 @@ runs, no allocator runs, nothing is checked. Every rule below follows from that 
 6. **Hidden compile-time args recompile.** e.g. `ttnn.slice(t, k)` with varying int `k`. Everything else
    that varies per call must be made call-invariant (`k_chunk_size = min(k_chunk, glob)`) or moved to
    device.
-7. **Python control flow is frozen.** One trace per path, or split into sections replayed in order.
+7. **Python control flow is frozen.** One trace per path, split into sections replayed in order, or a
+   fixed path that computes every branch and selects with device masks (workflow step 2).
 8. **Nothing allocated after capture may be alive at replay** — this includes program-cache entries
    created by a first-time op after capture (kernel binary DRAM buffer + op-owned tensors like the
    reshape mapping table live in device DRAM and are never freed). See `internals.md` § caches.
@@ -57,14 +58,25 @@ runs, no allocator runs, nothing is checked. Every rule below follows from that 
    - varies per call and an op consumes it → metadata tensor (`metadata-pattern.md`);
    - host-computed from data → move to a device op (e.g. `moe_padding_config`) or memoize before capture;
    - lazy allocation / per-call free → persistent buffer allocated during warmup, written in place;
-   - branch → decide at build time (constant per rank/config), or separate traces.
+   - branch → decide at build time (constant per rank/config), separate traces, or a **fixed path**: run
+     every branch each call and select with persistent device masks (`x*keep`, `+ select@patch`, one-hot
+     row-select matmul with HiFi4 + fp32 dest). `x*1`, `x+0` and one-hot HiFi4 matmuls are exact, so it
+     stays bit-exact vs eager. Cost: every branch runs every call (see Perf);
+   - host-side value asserts (tile-align, range) cannot run on the metadata path; move them to the code
+     that packs the metadata.
 3. **Decide the traced boundary.** Mixing is legal (see below). Start with the smallest region that
    removes the host cost you care about; extend later.
 4. **Wire the runtime** (mirror `tt_prefill_runtime.py`): `_prepare_trace` allocates persistent input,
    metadata tensors and outputs → one warm forward → `synchronize_device`. `capture_trace()` runs eagerly
    at compile time (not lazily on first request), AFTER D2D endpoints and completion sinks exist, after a
    warm pass with the same callbacks. Per call: copy input + metadata into persistent buffers on-device →
-   `controller.replay()` → read persistent outputs.
+   `controller.replay()` → read persistent outputs. Pipeline runtimes also need:
+   - the per-chunk staging ops (input/metadata copies, metadata slices) warmed before capture;
+   - capture after the first socket receive, so the inbound socket op is already compiled;
+   - non-last ranks: a warm-up send down the pipeline before capture (else the outbound socket op
+     compiles after capture). It also makes all ranks capture in parallel instead of serially;
+   - warm-ack count = every layer that acks (trunk + extra layers such as drafter or MTP levels), and
+     a D2H ack FIFO large enough to hold all warm acks (`bugs.md`).
 5. **Validate** (below). Only then measure perf.
 
 ## Mixing traced and untraced code
@@ -86,12 +98,20 @@ Conditions:
 2. **Multi-call.** Always ≥2 calls/chunks with DIFFERENT metadata. One call proves nothing: replay of
    call 0 with call 0's values is trivially correct.
 3. **Ladder.** 1 layer → few layers → full model; 1 chunk → 2 → many. Each rung vs untraced reference.
+   Before tracing, run eager-with-host-scalars vs eager-with-device-metadata/masks: it isolates the
+   conversion from trace.
 4. **Allocation tracker on** (tracks buffers allocated AFTER `end_trace_capture` while a trace exists, `trace_allocation_tracker.cpp`; with segmented capture, later segments count as "after" earlier ones): `TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1` set
    before `import ttnn`. `execute_trace` raises with the allocating traceback. Never set
    `TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1` for sign-off — it hides late compiles.
-5. **Metadata is consumed:** per-chunk device time must grow with chunk index (longer KV). Flat = replaying
+   A trace-owned output allocated inside the capture (held, rewritten by each replay) is a false
+   positive: wrap begin/end capture in `corruptible_allocation_scope` (`trace_compiler.py` pattern) and
+   keep post-capture code outside the scope so late compiles are still caught.
+5. **Control first on suspect hardware.** On a host with a marginal die, run eager vs eager before
+   blaming trace for a bit-exact diff. Likewise, if eager shows the same diff, it is not trace.
+6. **Metadata is consumed:** per-chunk device time must grow with chunk index (longer KV). Flat = replaying
    chunk 0.
-6. **Perf:** Tracy op-to-op gaps on the worst device; traced gain shows mostly on dispatch-bound small ops.
+7. **Perf:** Tracy op-to-op gaps on the worst device; traced gain shows mostly on dispatch-bound small ops.
+   A fixed path runs ops that eager skipped; profile it per op (one single-core op can dominate).
 
 ## Key files
 
@@ -107,6 +127,6 @@ Conditions:
 
 ## Maintenance
 
-This skill is living. When a trace task teaches something new (bug, rule, pattern), add it to the right
-file: rules here, recipes in `metadata-pattern.md`, failures in `bugs.md`, progress in `worklog.md`.
+Governed by the skill-evolution rule of this plugin (`rules/skill-evolution.md`): record root-caused
+bugs, retractions and user corrections here as they happen, keep `worklog.md` for task state only.
 Verify file:line references against HEAD before relying on them.
