@@ -1,6 +1,6 @@
 # secret-tens-skills
 
-Personal Claude Code skills for Tenstorrent work, packaged as one plugin (`sts`). The skills improve
+Claude Code skills for Tenstorrent work, packaged as one plugin (`sts`). The skills improve
 while they are used.
 
 | Skill | Use |

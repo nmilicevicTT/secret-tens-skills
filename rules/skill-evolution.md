@@ -19,8 +19,9 @@ Context compaction erases details, so write at the event, not "later":
 
 - **Evidence.** Cite a test, log, commit, or file:line. Unverified ideas stay in `worklog.md` or are
   marked `(unverified)`.
-- **General.** Phrase it as a rule that transfers to the next task. Host names, run IDs, dates, and
-  personal paths stay in `worklog.md` unless they are the evidence pointer.
+- **General.** Phrase it as a rule about the skill's subject that transfers to the next task and the
+  next model. Model or project names (e.g. which model hit it), task state, host names, run IDs, dates
+  and personal paths stay in `worklog.md`. The skills are public.
 - **Not worse than now.** Sharpen or replace existing text; never append a line that contradicts
   another. On conflict, newer evidence wins and the old text is deleted or moved to "Retracted" with
   the reason.

@@ -1,6 +1,6 @@
 ---
 name: tt-metal-trace
-description: Make a tt-metal model, or part of one (e.g. the DFlash drafter), run under Metal trace capture/replay (ttnn.begin_trace_capture / execute_trace). Use when adding trace to a model, converting an op to take per-call values from device tensors, debugging a trace that replays wrong/hangs/corrupts, or mixing traced and untraced code. Follows the method Pavle Popovic used for deepseek_v3_d_p traced prefill.
+description: Make a tt-metal model, or part of one, run under Metal trace capture/replay (ttnn.begin_trace_capture / execute_trace). Use when adding trace to a model, converting an op to take per-call values from device tensors, debugging a trace that replays wrong/hangs/corrupts, or mixing traced and untraced code. Follows the method Pavle Popovic used for deepseek_v3_d_p traced prefill.
 ---
 
 # tt-metal-trace
@@ -75,14 +75,14 @@ runs, no allocator runs, nothing is checked. Every rule below follows from that 
    - capture after the first socket receive, so the inbound socket op is already compiled;
    - non-last ranks: a warm-up send down the pipeline before capture (else the outbound socket op
      compiles after capture). It also makes all ranks capture in parallel instead of serially;
-   - warm-ack count = every layer that acks (trunk + extra layers such as drafter or MTP levels), and
+   - warm-ack count = every layer that acks (including extra layers beyond the main stack), and
      a D2H ack FIFO large enough to hold all warm acks (`bugs.md`).
 5. **Validate** (below). Only then measure perf.
 
 ## Mixing traced and untraced code
 
-Legal and used in production (#57561: Kimi verifier + DFlash taps traced, drafter finalize untraced).
-Conditions:
+Legal and used in production (e.g. a traced main forward followed by an untraced post-processing
+step). Conditions:
 - Untraced code runs strictly between replays, never inside a capture.
 - Its programs were warmed BEFORE the first capture (rule 8). A first-time compile after capture is a
   latent corruption.
@@ -93,7 +93,7 @@ Conditions:
 ## Validation method
 
 1. **Bit-exact, not PCC.** Traced vs untraced on the same inputs must match exactly
-   (`tests/dflash_prefill/test_dflash_trace.py` pattern). A stale buffer (previous call's data) still
+   (run both on the same inputs, assert `torch.equal`). A stale buffer (previous call's data) still
    correlates highly; PCC hides it.
 2. **Multi-call.** Always ≥2 calls/chunks with DIFFERENT metadata. One call proves nothing: replay of
    call 0 with call 0's values is trivially correct.

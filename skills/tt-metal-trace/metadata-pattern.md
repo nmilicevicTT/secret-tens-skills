@@ -1,7 +1,7 @@
 # Metadata-tensor pattern (per-call scalars on device)
 
 Reference PRs: #48903 rotary, #48905 zero_pad, #48906 update_padded, #48907 ring_mla, #51624 runtime,
-#55085 GLM indexer ops, #56988 valid_end.
+#55085 indexer ops, #56988 valid_end.
 
 ## Host side
 
